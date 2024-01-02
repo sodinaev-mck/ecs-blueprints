@@ -1,12 +1,8 @@
-provider "aws" {
-  region = "us-west-2"
-}
-
 data "aws_caller_identity" "current" {}
 
 locals {
   name   = "unicorn-ui"
-  region = "us-west-2"
+  region = var.region
 
   container_port = 7007 # Container port is specific to this app example
   container_name = "unicorn-ui"
@@ -38,13 +34,14 @@ module "ecs_service" {
 
   container_definitions = {
     (local.container_name) = {
-      image                    = module.ecr.repository_url
+      image                    = "${module.ecr.repository_url}:${var.image_tag}"
       readonly_root_filesystem = false
 
       environment = [
         { name = "BASE_URL", value = "http://${module.alb.dns_name}" },
-        { name = "POSTGRES_HOST", value = module.aurora_postgresdb.cluster_endpoint },
-        { name = "POSTGRES_PORT", value = module.aurora_postgresdb.cluster_port },
+        # { name = "POSTGRES_HOST", value = module.db.db_instance_endpoint },
+        { name = "POSTGRES_HOST", value = "10.0.10.139" },
+        { name = "POSTGRES_PORT", value = "5432" },
         { name = "POSTGRES_USER", value = "postgres" },
       ]
 
@@ -134,6 +131,13 @@ module "alb" {
       description = "HTTP web traffic"
       cidr_ipv4   = "0.0.0.0/0"
     }
+    all_https = {
+      from_port   = 443
+      to_port     = 445
+      ip_protocol = "tcp"
+      description = "HTTPS web traffic"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
   }
   security_group_egress_rules = { for subnet in data.aws_subnet.private_cidr :
     (subnet.availability_zone) => {
@@ -146,11 +150,41 @@ module "alb" {
     http = {
       port     = "80"
       protocol = "HTTP"
+      redirect = {
+        port = 443
+        protocol = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+
+    https = {
+      port                        = 443
+      protocol                    = "HTTPS"
+      ssl_policy                  = "ELBSecurityPolicy-TLS13-1-2-Res-2021-06"
+      certificate_arn             = data.aws_acm_certificate.wildcard.arn
+
+      action_type     = "authenticate-oidc"
+      authenticate_oidc = {
+        authentication_request_extra_params = {
+          display = "page"
+          prompt  = "login"
+        }
+        authorization_endpoint = var.auth_oidc.authorization_endpoint
+        client_id              = var.auth_oidc.client_id
+        client_secret          = var.auth_oidc.client_secret
+        issuer                 = var.auth_oidc.issuer
+        token_endpoint         = var.auth_oidc.token_endpoint
+        user_info_endpoint     = var.auth_oidc.user_info_endpoint
+        session_cookie_name = "backstage"
+        session_timeout = 3600
+        scope = "openid email offline_access"
+      }
 
       forward = {
         target_group_key = "ecs-task"
       }
     }
+
   }
 
   target_groups = {
@@ -180,17 +214,81 @@ module "alb" {
   tags = local.tags
 }
 
+resource "aws_route53_record" "backstage" {
+  zone_id = data.aws_route53_zone.poc.zone_id
+  name    = "izlite-backstage.${var.domain_name}"
+  type    = "CNAME"
+  ttl     = "300"
+  records = [module.alb.dns_name]
+}
+
+# module "db" {
+#   source  = "terraform-aws-modules/rds/aws"
+#   version = "6.3.0"
+
+#   identifier = "${local.name}-db2"
+
+#   # All available versions: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts
+#   engine               = "postgres"
+#   engine_version       = "14"
+#   family               = "postgres14" # DB parameter group
+#   major_engine_version = "14"         # DB option group
+#   instance_class       = "db.t4g.medium"
+
+#   allocated_storage     = 10
+#   max_allocated_storage = 20
+
+#   # NOTE: Do NOT use 'user' as the value for 'username' as it throws:
+#   # "Error creating DB Instance: InvalidParameterValue: MasterUsername
+#   # user cannot be used as it is a reserved word used by the engine"
+#   username = "postgres"
+#   manage_master_user_password = false
+#   password = data.aws_secretsmanager_secret_version.postgresdb_master_password.secret_string
+#   port     = 5432
+
+#   db_subnet_group_name   = "backstage-db"
+#   vpc_security_group_ids = ["sg-0d6a0b766f68daed7"]
+
+#   maintenance_window              = "Mon:00:00-Mon:03:00"
+#   backup_window                   = "03:00-06:00"
+#   # enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+#   # create_cloudwatch_log_group     = true
+
+#   backup_retention_period = 1
+#   skip_final_snapshot     = true
+#   deletion_protection     = false
+
+
+#   parameters = [
+#     {
+#       name  = "autovacuum"
+#       value = 1
+#     },
+#     {
+#       name  = "client_encoding"
+#       value = "utf8"
+#     }
+#   ]
+
+#   tags = local.tags
+# }
+
 ################################################################################
 # RDS Aurora for Backstage backend db
 ################################################################################
 
 module "aurora_postgresdb" {
   source  = "terraform-aws-modules/rds-aurora/aws"
-  version = "~> 8.5"
+  version = "~> 9.0"
 
-  name        = "backstage-db"
-  engine      = "aurora-postgresql"
-  engine_mode = "serverless"
+  name   = "backstage-db"
+  engine = "aurora-postgresql"
+  # engine_mode            = "serverless"
+  create_db_subnet_group = true
+  serverlessv2_scaling_configuration = {
+    max_capacity = 2.0
+    min_capacity = 1.0
+  }
 
   vpc_id  = data.aws_vpc.vpc.id
   subnets = data.aws_subnets.private.ids
@@ -275,3 +373,6 @@ data "aws_service_discovery_dns_namespace" "this" {
   name = "default.${data.aws_ecs_cluster.core_infra.cluster_name}.local"
   type = "DNS_PRIVATE"
 }
+
+
+

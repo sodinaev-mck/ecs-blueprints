@@ -24,3 +24,29 @@ variable "postgresdb_master_password" {
   type        = string
   sensitive   = true
 }
+
+variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+
+variable "image_tag" {
+  description = "ECR image tag" # had to specify after latest tag vanished somehow.
+  type = string
+}
+
+variable "domain_name" {
+  description = "Domain name to use for wildcard cert"
+  type = string
+}
+
+variable "auth_oidc" {
+  type = object({
+    issuer = string
+    authorization_endpoint = string
+    token_endpoint = string
+    user_info_endpoint = string
+    client_id = string
+    client_secret = string
+  })
+}

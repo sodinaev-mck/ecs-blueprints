@@ -21,7 +21,7 @@ module "codepipeline_s3_bucket" {
   version = "~> 3.15"
 
   bucket_prefix = "codepipeline-${local.region}-"
-  acl           = "private"
+  # acl           = "private"
 
   # For example only - please re-evaluate for your environment
   force_destroy = true
@@ -70,7 +70,7 @@ module "codebuild_ci" {
   s3_bucket      = module.codepipeline_s3_bucket
 
   environment = {
-    image           = "aws/codebuild/standard:5.0"
+    image           = "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
     privileged_mode = true
     environment_variables = [
       {

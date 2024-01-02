@@ -1,12 +1,6 @@
-provider "aws" {
-  region = local.region
-}
-
-data "aws_availability_zones" "available" {}
-
 locals {
-  name   = basename(path.cwd)
-  region = "us-west-2"
+  name   = var.app_name
+  region = var.region
 
   vpc_cidr = "10.0.0.0/16"
   azs      = slice(data.aws_availability_zones.available.names, 0, 3)
@@ -66,7 +60,7 @@ module "vpc" {
   public_subnets  = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k)]
   private_subnets = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 10)]
 
-  enable_nat_gateway = true
+  enable_nat_gateway = false
   single_nat_gateway = true
 
   # Manage so we can name
@@ -79,3 +73,13 @@ module "vpc" {
 
   tags = local.tags
 }
+
+
+module "wildcard_cert" {
+  source  = "terraform-aws-modules/acm/aws"
+  version = "~> 4.0"
+
+  domain_name = "*.${var.domain_name}"
+  zone_id     = data.aws_route53_zone.this.id
+}
+
